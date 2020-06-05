@@ -1,19 +1,17 @@
 package com.tm.kafka.connect.rest.http.executor;
 
 
-import okhttp3.ConnectionPool;
-import okhttp3.Headers;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.RequestBody;
+import okhttp3.*;
 import org.apache.kafka.common.Configurable;
 import org.apache.kafka.connect.errors.RetriableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.*;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.security.cert.CertificateException;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -25,17 +23,60 @@ public class OkHttpRequestExecutor implements RequestExecutor, Configurable {
   private static Logger log = LoggerFactory.getLogger(OkHttpRequestExecutor.class);
 
   private OkHttpClient client;
+  private OkHttpClient.Builder builder;
 
 
   @Override
   public void configure(Map<String, ?> props) {
     final OkHttpRequestExecutorConfig config = new OkHttpRequestExecutorConfig(props);
 
-    client = new OkHttpClient.Builder()
+    builder = new OkHttpClient.Builder()
       .connectionPool(new ConnectionPool(config.getMaxIdleConnections(), config.getKeepAliveDuration(), TimeUnit.MILLISECONDS))
       .connectTimeout(config.getConnectionTimeout(), TimeUnit.MILLISECONDS)
-      .readTimeout(config.getReadTimeout(), TimeUnit.MILLISECONDS)
-      .build();
+      .readTimeout(config.getReadTimeout(), TimeUnit.MILLISECONDS);
+    builder = this.configureToIgnoreCertificate(builder);
+    client = builder.build();
+  }
+
+  private OkHttpClient.Builder configureToIgnoreCertificate(OkHttpClient.Builder builder) {
+    try {
+
+      // Create a trust manager that does not validate certificate chains
+      final TrustManager[] trustAllCerts = new TrustManager[]{
+        new X509TrustManager() {
+          @Override
+          public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType)
+            throws CertificateException {
+          }
+
+          @Override
+          public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType)
+            throws CertificateException {
+          }
+
+          @Override
+          public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+            return new java.security.cert.X509Certificate[]{};
+          }
+        }
+      };
+
+      // Install the all-trusting trust manager
+      final SSLContext sslContext = SSLContext.getInstance("SSL");
+      sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+      // Create an ssl socket factory with our all-trusting manager
+      final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
+
+      builder.sslSocketFactory(sslSocketFactory, (X509TrustManager) trustAllCerts[0]);
+      builder.hostnameVerifier(new HostnameVerifier() {
+        @Override
+        public boolean verify(String hostname, SSLSession session) {
+          return true;
+        }
+      });
+    } catch (Exception e) {
+    }
+    return builder;
   }
 
   @Override
